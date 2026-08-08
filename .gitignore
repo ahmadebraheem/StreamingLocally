@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Project-specific: Kafka/Flink/Docker practice ---
+
+# Flink checkpoints (bind-mounted, real runtime state)
+checkpoints/
+
+# Parquet output from the batch writer
+parquet-output/
+
+# Kafka data, if ever bind-mounted instead of a named volume
+kafka-data/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
