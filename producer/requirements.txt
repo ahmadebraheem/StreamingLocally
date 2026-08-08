@@ -1,3 +1,9 @@
+# Producer API dependencies
+# -------------------------
+# fastapi          - HTTP framework exposing /start, /stop, /produce endpoints
+# uvicorn[standard] - ASGI server with WebSocket and HTTP/2 support
+# aiokafka         - Async Kafka producer client (non-blocking send_and_wait)
+
 fastapi
 uvicorn[standard]
 aiokafka

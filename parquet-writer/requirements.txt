@@ -1,2 +1,7 @@
+# Parquet Writer dependencies
+# ---------------------------
+# kafka-python  - Synchronous Kafka consumer (simple blocking loop)
+# pyarrow       - Apache Arrow / Parquet read-write library
+
 kafka-python
 pyarrow
