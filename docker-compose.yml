@@ -1,36 +1,80 @@
+# =============================================================================
+# StreamingLocally — Docker Compose Stack
+# =============================================================================
+#
+# Full on-prem streaming pipeline:
+#
+#   producer-api  -->  Kafka (test-topic)
+#                           |
+#                           v
+#                      Flink job (validate + DLQ split)
+#                           |
+#              +------------+------------+
+#              v                         v
+#        Kafka (processed)        Kafka (raw-events-dlq)
+#              |                         |
+#              +------------+------------+
+#                           v
+#                    parquet-writer  -->  ./parquet-output/*.parquet
+#
+# Quick start:
+#   docker compose up --build -d
+#   curl -X POST http://localhost:8000/start
+#   docker exec -it jobmanager ./bin/flink run -py /opt/flink/usrlib/job.py
+#
+# =============================================================================
+
 services:
+
+  # ---------------------------------------------------------------------------
+  # Kafka — message broker (KRaft mode, no ZooKeeper required)
+  # ---------------------------------------------------------------------------
   kafka:
     image: apache/kafka:3.8.0
     container_name: kafka
     ports:
-      - "9092:9092"
-      - "9094:9094"
+      - "9092:9092"   # Internal PLAINTEXT listener (Docker network)
+      - "9094:9094"   # EXTERNAL listener for host-machine clients (e.g. kcat)
     environment:
+      # Single-node KRaft cluster: this node is both controller and broker
       - KAFKA_NODE_ID=0
       - KAFKA_PROCESS_ROLES=controller,broker
       - KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+
+      # Three listeners:
+      #   PLAINTEXT  :9092 — inter-service communication inside Compose network
+      #   CONTROLLER :9093 — KRaft controller protocol (internal only)
+      #   EXTERNAL   :9094 — host-accessible endpoint (advertised as localhost)
       - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
       - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
       - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
       - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
 
+      # Single-broker cluster: replication factor must be 1
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     volumes:
+      # Persist topic data across container restarts
       - kafka-data:/var/lib/kafka/data
-  
+
+  # ---------------------------------------------------------------------------
+  # Producer API — FastAPI service that generates synthetic events
+  # ---------------------------------------------------------------------------
   producer-api:
     build: ./producer
     ports:
-      - "8000:8000"
+      - "8000:8000"   # HTTP API: /start, /stop, /produce
     depends_on:
-      - kafka
+      - kafka         # Must be up before producer can connect to bootstrap
 
+  # ---------------------------------------------------------------------------
+  # Flink JobManager — cluster coordinator, REST API, checkpoint orchestration
+  # ---------------------------------------------------------------------------
   jobmanager:
     build: ./flink-job
     container_name: jobmanager
     ports:
-      - "8081:8081"
+      - "8081:8081"   # Flink Web UI: http://localhost:8081
     command: jobmanager
     environment:
       - |
@@ -40,8 +84,12 @@ services:
         state.checkpoints.dir: file:///checkpoints
         state.backend.incremental: true
     volumes:
+      # Checkpoint state persisted to host for recovery across restarts
       - ./checkpoints:/checkpoints
 
+  # ---------------------------------------------------------------------------
+  # Flink TaskManager — executes task slots (operators run here)
+  # ---------------------------------------------------------------------------
   taskmanager:
     build: ./flink-job
     container_name: taskmanager
@@ -55,18 +103,23 @@ services:
         state.checkpoints.dir: file:///checkpoints
         state.backend.incremental: true
     depends_on:
-      - jobmanager
+      - jobmanager    # TaskManager registers with JobManager on startup
     volumes:
       - ./checkpoints:/checkpoints
 
+  # ---------------------------------------------------------------------------
+  # Parquet Writer — consumes processed + DLQ topics, writes Parquet files
+  # ---------------------------------------------------------------------------
   parquet-writer:
     build: ./parquet-writer
     container_name: parquet-writer
     volumes:
+      # Parquet output files appear here on the host
       - ./parquet-output:/app/parquet-output
     depends_on:
       - kafka
-    restart: unless-stopped
+    restart: unless-stopped   # Auto-restart if the consumer crashes
 
+# Named volumes — managed by Docker, survive `docker compose down` (not `down -v`)
 volumes:
   kafka-data:
